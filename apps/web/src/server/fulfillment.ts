@@ -1,6 +1,15 @@
-import { prisma } from "@checkout/db";
+import { prisma, Prisma } from "@checkout/db";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
+
+const orderWithRelations = Prisma.validator<Prisma.OrderDefaultArgs>()({
+  include: {
+    product: { include: { course: true } },
+    customer: true,
+  },
+});
+
+type OrderWithRelations = Prisma.OrderGetPayload<typeof orderWithRelations>;
 
 /**
  * Chamado quando um Order vira PAID.
@@ -9,10 +18,7 @@ import { randomBytes } from "node:crypto";
 export async function fulfillOrder(orderId: string) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    include: {
-      product: { include: { course: true } },
-      customer: true,
-    },
+    ...orderWithRelations,
   });
 
   if (!order) throw new Error("Order não encontrada");
@@ -34,14 +40,14 @@ export async function fulfillOrder(orderId: string) {
   }
 }
 
-async function grantMemberAccess(order: NonNullable<Awaited<ReturnType<typeof prisma.order.findUnique>>>) {
-  // já liberou? idempotência
+async function grantMemberAccess(order: OrderWithRelations) {
+  // idempotência
   const existing = await prisma.memberAccess.findUnique({
     where: { orderId: order.id },
   });
   if (existing) return;
 
-  const tempPassword = randomBytes(6).toString("hex"); // ex: a3f9b1c2d4
+  const tempPassword = randomBytes(6).toString("hex");
   const hash = await bcrypt.hash(tempPassword, 10);
 
   await prisma.memberAccess.create({
@@ -59,7 +65,7 @@ async function grantMemberAccess(order: NonNullable<Awaited<ReturnType<typeof pr
   );
 }
 
-async function deliverViaWhatsApp(order: NonNullable<Awaited<ReturnType<typeof prisma.order.findUnique>>>) {
+async function deliverViaWhatsApp(order: OrderWithRelations) {
   if (!order.customer.phone) return;
 
   // TODO: chamar Evolution API / Z-API
