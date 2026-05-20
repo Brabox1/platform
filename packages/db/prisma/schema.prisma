@@ -1,0 +1,362 @@
+// Prisma schema — Checkout Platform
+// docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════
+// AUTH + USER (vendedor da plataforma)
+// ═══════════════════════════════════════════════════════════
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  image         String?
+  password      String? // hash bcrypt
+
+  role          UserRole  @default(SELLER)
+  kycStatus     KycStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kycSubmission KycSubmission?
+  products      Product[]
+  orders        Order[]
+  sessions      Session[]
+  payouts       Payout[]
+
+  @@index([email])
+}
+
+enum UserRole {
+  SELLER
+  ADMIN
+}
+
+enum KycStatus {
+  PENDING       // ainda não enviou
+  IN_REVIEW     // enviou, aguardando análise
+  APPROVED      // ok pra vender
+  REJECTED      // recusado
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ═══════════════════════════════════════════════════════════
+// KYC
+// ═══════════════════════════════════════════════════════════
+
+model KycSubmission {
+  id        String    @id @default(cuid())
+  userId    String    @unique
+  cpfCnpj   String
+  fullName  String
+  birthDate DateTime?
+
+  selfieUrl     String?
+  documentUrl   String? // RG/CNH frente
+  documentBackUrl String?
+  proofOfAddressUrl String?
+
+  cafRequestId String? // id da requisição na Caf
+  cafStatus    String?
+  rejectionReason String?
+
+  submittedAt DateTime  @default(now())
+  reviewedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([cpfCnpj])
+}
+
+// ═══════════════════════════════════════════════════════════
+// PRODUTOS (infoprodutos do vendedor)
+// ═══════════════════════════════════════════════════════════
+
+model Product {
+  id          String  @id @default(cuid())
+  sellerId    String
+  slug        String  @unique
+  name        String
+  description String?
+  priceCents  Int
+  imageUrl    String?
+
+  active      Boolean @default(true)
+  deliveryType DeliveryType @default(MEMBER_AREA)
+
+  // checkout customization
+  checkoutTheme Json? // cores, logo etc
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  seller     User        @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  orderBumps OrderBump[]
+  upsells    Upsell[]
+  course     Course?
+  orders     Order[]
+
+  @@index([sellerId])
+  @@index([slug])
+}
+
+enum DeliveryType {
+  MEMBER_AREA  // libera acesso à área de membros
+  WHATSAPP     // entrega via mensagem WhatsApp
+  REDIRECT     // redireciona pra URL externa
+  PDF_DOWNLOAD // gera link de download
+}
+
+model OrderBump {
+  id          String  @id @default(cuid())
+  productId   String
+  name        String
+  description String?
+  priceCents  Int
+  active      Boolean @default(true)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+model Upsell {
+  id          String  @id @default(cuid())
+  productId   String
+  step        Int     @default(1)
+  name        String
+  description String?
+  priceCents  Int
+  active      Boolean @default(true)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+// ═══════════════════════════════════════════════════════════
+// ÁREA DE MEMBROS
+// ═══════════════════════════════════════════════════════════
+
+model Course {
+  id        String   @id @default(cuid())
+  productId String   @unique
+  title     String
+  coverUrl  String?
+  createdAt DateTime @default(now())
+
+  product Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  modules Module[]
+}
+
+model Module {
+  id       String  @id @default(cuid())
+  courseId String
+  title    String
+  order    Int     @default(0)
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@index([courseId])
+}
+
+model Lesson {
+  id          String  @id @default(cuid())
+  moduleId    String
+  title       String
+  description String?
+  videoUrl    String?
+  durationSec Int?
+  order       Int     @default(0)
+  content     String? // markdown / html
+
+  module Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@index([moduleId])
+}
+
+// ═══════════════════════════════════════════════════════════
+// COMPRADOR + ACESSO
+// ═══════════════════════════════════════════════════════════
+
+model Customer {
+  id    String  @id @default(cuid())
+  email String
+  name  String?
+  cpf   String?
+  phone String?
+
+  createdAt DateTime @default(now())
+
+  orders        Order[]
+  memberAccess  MemberAccess[]
+
+  @@unique([email])
+}
+
+model MemberAccess {
+  id         String   @id @default(cuid())
+  customerId String
+  productId  String
+  orderId    String   @unique
+  password   String   // hash, gerado e enviado por email após pagamento
+  grantedAt  DateTime @default(now())
+  expiresAt  DateTime?
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([productId])
+}
+
+// ═══════════════════════════════════════════════════════════
+// PEDIDOS + TRANSAÇÕES
+// ═══════════════════════════════════════════════════════════
+
+model Order {
+  id         String      @id @default(cuid())
+  sellerId   String
+  customerId String
+  productId  String
+
+  status      OrderStatus @default(PENDING)
+  paymentMethod PaymentMethod
+  totalCents  Int
+  feeCents    Int          @default(0) // taxa AmploPay
+  netCents    Int          @default(0) // líquido pro vendedor
+
+  // tracking
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
+
+  // AmploPay
+  amploTransactionId String? @unique
+  pixQrCode          String?
+  pixCopyPaste       String?
+  pixExpiresAt       DateTime?
+
+  paidAt    DateTime?
+  refundedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  seller     User       @relation(fields: [sellerId], references: [id])
+  customer   Customer   @relation(fields: [customerId], references: [id])
+  product    Product    @relation(fields: [productId], references: [id])
+  items      OrderItem[]
+  events     WebhookEvent[]
+
+  @@index([sellerId])
+  @@index([customerId])
+  @@index([status])
+  @@index([amploTransactionId])
+}
+
+model OrderItem {
+  id         String @id @default(cuid())
+  orderId    String
+  name       String
+  priceCents Int
+  type       OrderItemType
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+enum OrderItemType {
+  PRODUCT
+  ORDER_BUMP
+  UPSELL
+}
+
+enum OrderStatus {
+  PENDING       // criada, aguardando pagamento
+  PAID          // paga (webhook recebido)
+  EXPIRED       // pix expirou
+  REFUNDED      // estornada
+  CHARGEBACK    // chargeback
+  FAILED        // falha no pagamento
+}
+
+enum PaymentMethod {
+  PIX
+  CREDIT_CARD
+  BOLETO
+}
+
+// ═══════════════════════════════════════════════════════════
+// WEBHOOKS (idempotência + auditoria)
+// ═══════════════════════════════════════════════════════════
+
+model WebhookEvent {
+  id          String   @id @default(cuid())
+  provider    String   // "amplopay"
+  externalId  String   // event id da AmploPay
+  eventType   String   // ex: "transaction.paid"
+  payload     Json
+  orderId     String?
+  processedAt DateTime?
+  error       String?
+  receivedAt  DateTime @default(now())
+
+  order Order? @relation(fields: [orderId], references: [id])
+
+  @@unique([provider, externalId])
+  @@index([orderId])
+  @@index([eventType])
+}
+
+// ═══════════════════════════════════════════════════════════
+// PAYOUTS (saques do vendedor)
+// ═══════════════════════════════════════════════════════════
+
+model Payout {
+  id          String       @id @default(cuid())
+  userId      String
+  amountCents Int
+  status      PayoutStatus @default(REQUESTED)
+  pixKey      String?
+  amploPayoutId String?    @unique
+
+  requestedAt DateTime  @default(now())
+  paidAt      DateTime?
+  error       String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+enum PayoutStatus {
+  REQUESTED
+  PROCESSING
+  PAID
+  FAILED
+}
